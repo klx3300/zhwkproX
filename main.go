@@ -13,11 +13,12 @@ type IOPair struct {
 }
 
 func main() {
-	server := "127.0.0.1:1992"
+	server := ":1992"
 	stcpaddr, _ := net.ResolveTCPAddr("tcp4", server)
 	conn, cerr := net.DialTCP("tcp4", nil, stcpaddr)
 	if cerr != nil {
 		fmt.Printf("Network error.Terminating..\n")
+		fmt.Println(cerr.Error())
 		return
 	}
 	defer conn.Close()
@@ -97,6 +98,7 @@ func main() {
 					sconn, err := net.DialTCP("tcp", nil, &dsttcpaddr)
 					if err != nil {
 						fmt.Printf("NetworkError.Cancelling...\n")
+						fmt.Println(err.Error())
 						close(tmpiop.out)
 						delete(conns, addrxport2id(zgr.ipaddr, zgr.port))
 						return
