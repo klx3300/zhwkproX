@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -11,6 +12,10 @@ type IOPair struct {
 	in  chan []byte
 	out chan []byte
 }
+
+const (
+	SRVSTATE_ERR = iota
+)
 
 func main() {
 	server := ":1992"
@@ -70,16 +75,42 @@ func main() {
 	conns := make(map[uint32]IOPair)
 	for {
 		// accept requests from..
-		buffbyte = make([]byte, 102400)
-		n, err := conn.Read(buffbyte)
-		if err != nil {
-			fmt.Printf("Network error.Terminating...\n")
-			return
+		buffbyte = make([]byte, 1)
+		var zgr zhwkGetRequest
+		_, err := conn.Read(buffbyte)
+		handleErr := func(err error) {
+			if err != nil {
+				fmt.Printf("Network Error %v.Terminating..\n", err.Error())
+				os.Exit(-1)
+			}
 		}
-		buffbyte = buffbyte[:n]
-		fmt.Println(buffbyte)
-		go func(buffbyte []byte) {
-			zgr := makeGetRequest(buffbyte)
+		handleErr(err)
+		zgr.ipversion = buffbyte[0]
+		// read ipaddr
+		switch zgr.ipversion {
+		case 0x04:
+			zgr.ipaddr = make([]byte, 4)
+			_, err = conn.Read(zgr.ipaddr)
+			handleErr(err)
+		case 0x06:
+			zgr.ipaddr = make([]byte, 16)
+			_, err = conn.Read(zgr.ipaddr)
+			handleErr(err)
+		}
+		// read port
+		zgr.port = make([]byte, 2)
+		_, err = conn.Read(zgr.port)
+		handleErr(err)
+		tmpdtlen := make([]byte, 4)
+		_, err = conn.Read(tmpdtlen)
+		handleErr(err)
+		zgr.datalength = binary.LittleEndian.Uint32(tmpdtlen)
+		if zgr.datalength != 0 {
+			zgr.data = make([]byte, int(zgr.datalength))
+			_, err = conn.Read(zgr.data)
+			handleErr(err)
+		}
+		go func(zgr zhwkGetRequest) {
 			zgr.data = AESDecrypt(zgr.data)
 			pair, isok := conns[addrxport2id(zgr.ipaddr, zgr.port)]
 			if !isok {
@@ -99,13 +130,11 @@ func main() {
 					if err != nil {
 						fmt.Printf("NetworkError.Cancelling...\n")
 						fmt.Println(err.Error())
-						close(tmpiop.out)
 						delete(conns, addrxport2id(zgr.ipaddr, zgr.port))
 						return
 					}
 					defer func() {
 						// close gochannels
-						close(tmpiop.out)
 						delete(conns, addrxport2id(zgr.ipaddr, zgr.port))
 						sconn.Close()
 					}()
@@ -115,7 +144,9 @@ func main() {
 							tmpbuffer := make([]byte, 102400)
 							n, err := sconn.Read(tmpbuffer)
 							if err != nil {
-								fmt.Printf("Network error. Terminating..")
+								fmt.Printf("Prox to Dest Conn error %v. Terminating..\n", err.Error())
+								close(tmpiop.out)
+								delete(conns, addrxport2id(zgr.ipaddr, zgr.port))
 								sconn.Close()
 								return
 							}
@@ -154,6 +185,19 @@ func main() {
 					for {
 						tmpbuff, ok := <-pair.out
 						if !ok {
+							// constuct zgrr
+							var zgrr zhwkGetReply
+							zgrr.ipversion = zgr.ipversion
+							zgrr.ipaddr = zgr.ipaddr
+							zgrr.port = zgr.port
+							zgrr.datalength = 0x00
+							zgrr.data = make([]byte, 1)
+							_, err := conn.Write(zgrr.toByteArr())
+							if err != nil {
+								fmt.Printf("Interserver side Conn error %v.Terminating..\n", err.Error())
+								conn.Close()
+								os.Exit(-1)
+							}
 							return
 						}
 						fmt.Printf("Received str:\n%v\n", string(tmpbuff))
@@ -170,6 +214,7 @@ func main() {
 							if err != nil {
 								fmt.Printf("Network error.Terminating..\n")
 								conn.Close()
+								os.Exit(-1)
 							}
 						}()
 					}
@@ -177,6 +222,6 @@ func main() {
 			}
 			// write data into..
 			pair.in <- zgr.data
-		}(buffbyte)
+		}(zgr)
 	}
 }

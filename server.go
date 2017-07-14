@@ -61,7 +61,9 @@ func (zgr *zhwkGetReply) toByteArr() []byte {
 	tmpcnv := make([]byte, 4)
 	binary.LittleEndian.PutUint32(tmpcnv, zgr.datalength)
 	barr = iappender(barr, tmpcnv)
-	barr = iappender(barr, zgr.data)
+	if zgr.datalength != 0 {
+		barr = iappender(barr, zgr.data)
+	}
 	return barr
 }
 
